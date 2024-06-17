@@ -110,13 +110,12 @@ local function get_word(line, start_i)
 end
 
 local function matchadd_all_windows(w, hl_grp)
-  -- TODO: run in schedule?
-  local new_m_id = vim.fn.matchadd(hl_grp, "\\<" .. w .. "\\>", 10, -1)
+  local new_m_id = vim.fn.matchadd(hl_grp,  w, 10, -1)
   local cur_win_id = vim.api.nvim_tabpage_get_win(0)
   for _, w_id in ipairs(api.nvim_list_wins()) do
     if w_id ~= cur_win_id then
       api.nvim_win_call(w_id, function()
-        vim.fn.matchadd(hl_grp, "\\<" .. w .. "\\>", 10, new_m_id)
+        vim.fn.matchadd(hl_grp, w, 10, new_m_id)
       end)
     end
   end
@@ -132,27 +131,56 @@ local function matchdel_all_windows(m_id)
   end
 end
 
-local function highlight_word_under_cursor()
-  local r, c = unpack(api.nvim_win_get_cursor(0))
-  local line = api.nvim_buf_get_lines(0, r - 1, r, true)[1]
-  local ws, w = get_word(line, c + 1)
-  if ws == 0 then
-    notify("no word found under cursor", vim.log.levels.INFO)
-    return
+function  M.highlight_word_under_cursor()
+  local mode = vim.api.nvim_get_mode()
+  local word = vim.fn.expand "<cword>"
+  -- vim.print(mode)
+  -- V is for multiline visual, v is for single line visual, make it work with boths
+  if mode["mode"] == "V" or mode["mode"] == 'v' then
+    -- nvim_feedkeys or use nvim_input send esc to exit visual mode
+    local esc = vim.api.nvim_replace_termcodes('<esc>', true, false, true)
+    vim.api.nvim_feedkeys(esc, 'x', false)
+    local maxcol = 2147483647
+    local vbeg = vim.api.nvim_buf_get_mark(vim.api.nvim_get_current_buf(), "<")
+    local vend = vim.api.nvim_buf_get_mark(vim.api.nvim_get_current_buf(), ">")
+    -- handle nvim_buf_get_mark or getpos that reports v:maxcol if at end of line
+    if vbeg[2] == maxcol then
+      vbeg[2] = vbeg[2]-1
+    end
+    -- we need to include last character in match, if match is on end of collumn do accordingly
+    -- otherwise b/c indexing is zero based add one character to get character under curosr
+    if vend[2] == maxcol then
+      vend[2] = vend[2]-1
+    else
+      vend[2] = vend[2] + 1
+    end
+    -- this is api call is 0 based so we need to substract one
+    local words = vim.api.nvim_buf_get_text(vim.api.nvim_get_current_buf(), vbeg[1] - 1, vbeg[2], vend[1] - 1, vend[2], {})
+    word = ""
+    -- concatentate words , but insert new line, which must be escpated for matchadd to work
+    -- in case of only one word, don't add newline
+    for i, w in ipairs(words) do
+      if i ~= 1 then
+        word = word .. "\\n"..  w
+      else
+        word = word ..  w
+      end
+    end
   end
-  local m_id = wreg_is_registered(w)
+
+  local m_id = wreg_is_registered(word)
   if m_id == nil then
     local hl_grp = next_hl_grp()
-    m_id = matchadd_all_windows(w, hl_grp)
-    wreg_register(w, m_id, hl_grp)
+    m_id = matchadd_all_windows(word, hl_grp)
+    wreg_register(word, m_id, hl_grp)
     -- TODO: introduce settings:
-    vim.fn.setreg("/", "\\<" .. w .. "\\>")
+    vim.fn.setreg("/", "\\<" .. word .. "\\>")
   else
     matchdel_all_windows(m_id)
-    wreg_unregister(w)
+    wreg_unregister(word)
     -- TODO: introduce settings:
     local sw = vim.fn.getreg("/")
-    if w == string.sub(sw, 3, -3) then
+    if word == string.sub(sw, 3, -3) then
       vim.fn.setreg("/", "")
     end
   end
@@ -177,7 +205,7 @@ function M.setup(opts)
   set_hl_groups(M.opts.hl_grps)
 
   vim.api.nvim_create_user_command("HiMyWordsToggle", function()
-    highlight_word_under_cursor()
+    M.highlight_word_under_cursor()
   end, { desc = "Highlight/unhighlight the word under cursor" })
 
   vim.api.nvim_create_user_command("HiMyWordsClear", function()
@@ -208,5 +236,4 @@ function M.setup(opts)
 end
 
 M.setup()
-
 return M
